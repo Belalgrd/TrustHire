@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/cron/refund-engine?secret=your_new_cron_secret_here",
-      "schedule": "0 */6 * * *"
+      "path": "/api/cron/refund-engine?secret=trusthire_cron_secret_2024",
+      "schedule": "0 0 * * *"
     }
   ]
 }
