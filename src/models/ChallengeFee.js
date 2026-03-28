@@ -20,9 +20,9 @@ const challengeFeeSchema = new mongoose.Schema(
     amount: {
       type: Number,
       required: true,
+      min: [1, 'Amount must be at least ₹1'],
+      max: [50000, 'Amount cannot exceed ₹50,000'],
     },
-
-    // Razorpay fields
     razorpayOrderId: {
       type: String,
       required: true,
@@ -39,22 +39,21 @@ const challengeFeeSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
-
-    // Status tracking
     status: {
       type: String,
       enum: ['created', 'held', 'refunded', 'forfeited'],
       default: 'created',
-      // created   → order created, payment not done yet
-      // held      → payment successful, waiting for outcome
-      // refunded  → money returned to applicant
-      // forfeited → applicant no-showed, money kept
     },
     reason: {
       type: String,
       default: '',
     },
     processedAt: {
+      type: Date,
+      default: null,
+    },
+    // ✅ Track verification timestamp
+    verifiedAt: {
       type: Date,
       default: null,
     },
@@ -66,6 +65,16 @@ const challengeFeeSchema = new mongoose.Schema(
 
 // One fee per application
 challengeFeeSchema.index({ applicationId: 1 }, { unique: true });
+
+// ✅ Index for stale order cleanup
+challengeFeeSchema.index({ status: 1, createdAt: 1 });
+
+// ✅ Track when payment is verified
+challengeFeeSchema.pre('save', function () {
+  if (this.isModified('status') && this.status === 'held') {
+    this.verifiedAt = new Date();
+  }
+});
 
 const ChallengeFee =
   mongoose.models.ChallengeFee ||

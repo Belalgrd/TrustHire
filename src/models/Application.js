@@ -43,6 +43,11 @@ const applicationSchema = new mongoose.Schema(
       type: String,
       default: '',
     },
+    // ✅ Track when priority was activated
+    priorityActivatedAt: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,
@@ -51,6 +56,16 @@ const applicationSchema = new mongoose.Schema(
 
 // Prevent duplicate applications
 applicationSchema.index({ jobId: 1, applicantId: 1 }, { unique: true });
+
+// ✅ Fast priority sorting
+applicationSchema.index({ jobId: 1, isPriority: -1, createdAt: -1 });
+
+// ✅ Track priority activation
+applicationSchema.pre('save', function () {
+  if (this.isModified('isPriority') && this.isPriority === true) {
+    this.priorityActivatedAt = new Date();
+  }
+});
 
 const Application =
   mongoose.models.Application ||
