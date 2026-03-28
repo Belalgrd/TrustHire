@@ -7,6 +7,8 @@ import ChallengeFee from '@/models/ChallengeFee';
 import { authenticate } from '@/lib/auth';
 import { sendEmail } from '@/lib/resend';
 import { feeForfeitedEmail } from '@/emails/feeForfeited';
+import { createNotification } from '@/lib/notifications';
+import { createLog, getIP } from '@/lib/logger';
 
 export async function PATCH(request, { params }) {
   try {
@@ -14,6 +16,7 @@ export async function PATCH(request, { params }) {
     if (auth.error) return auth.error;
 
     await connectDB();
+    const ip = getIP(request);
 
     const { id } = params;
 
@@ -36,7 +39,6 @@ export async function PATCH(request, { params }) {
     application.status = 'interview_no_show';
     await application.save();
 
-    // ── INSTANT FORFEIT if challenge fee exists ──
     const fee = await ChallengeFee.findOne({
       applicationId: id,
       status: 'held',
@@ -47,7 +49,17 @@ export async function PATCH(request, { params }) {
       fee.reason = 'Did not attend scheduled interview';
       fee.processedAt = new Date();
       await fee.save();
-      console.log(`🚫 Fee forfeited: ₹${fee.amount}`);
+
+      // ✅ LOG: FEE FORFEITED
+      await createLog({
+        action: 'fee_forfeited',
+        userId: application.applicantId,
+        targetId: fee._id,
+        targetModel: 'ChallengeFee',
+        description: `Fee ₹${fee.amount} forfeited — no-show`,
+        metadata: { amount: fee.amount, jobTitle: application.jobId.title },
+        ip,
+      });
     }
 
     // ✅ SEND FEE FORFEITED EMAIL
@@ -66,12 +78,36 @@ export async function PATCH(request, { params }) {
             subject: forfeitEmail.subject,
             html: forfeitEmail.html,
           });
-          console.log('📧 Fee forfeited email sent to:', applicant.email);
         }
       }
     } catch (emailError) {
       console.error('📧 Forfeit email failed:', emailError);
     }
+
+    // ✅ CREATE NO-SHOW NOTIFICATION
+    await createNotification({
+      userId: application.applicantId,
+      type: 'fee_forfeited',
+      title: 'Interview No-Show ⚠️',
+      message: `You missed your interview for ${application.jobId.title} at ${application.jobId.company}.${fee ? ` ₹${fee.amount} has been forfeited.` : ''}`,
+      link: '/applicant/applications',
+    });
+
+    // ✅ LOG: APPLICATION NO-SHOW
+    await createLog({
+      action: 'application_no_show',
+      userId: auth.userId,
+      targetId: application._id,
+      targetModel: 'Application',
+      description: `No-show marked — ${application.jobId.title}`,
+      metadata: {
+        applicantId: application.applicantId.toString(),
+        jobTitle: application.jobId.title,
+        hadFee: !!fee,
+        feeAmount: fee?.amount || 0,
+      },
+      ip,
+    });
 
     return NextResponse.json({
       success: true,

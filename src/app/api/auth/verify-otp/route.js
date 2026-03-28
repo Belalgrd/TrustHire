@@ -6,10 +6,13 @@ import Otp from '@/models/Otp';
 import { generateToken } from '@/lib/auth';
 import { sendEmail } from '@/lib/resend';
 import { welcomeEmail } from '@/emails/welcomeEmail';
+import { createNotification } from '@/lib/notifications';
+import { createLog, getIP } from '@/lib/logger';
 
 export async function POST(request) {
   try {
     await connectDB();
+    const ip = getIP(request);
 
     const { name, email, password, role, otp } = await request.json();
 
@@ -90,8 +93,27 @@ export async function POST(request) {
       console.log('📧 Welcome email sent to:', email);
     } catch (emailError) {
       console.error('📧 Welcome email failed:', emailError);
-      // Don't fail registration if email fails
     }
+
+    // ✅ CREATE WELCOME NOTIFICATION
+    await createNotification({
+      userId: user._id,
+      type: 'welcome',
+      title: 'Welcome to TrustHire! 🎉',
+      message: `Your account has been created as ${role}. Start exploring!`,
+      link: role === 'recruiter' ? '/recruiter/dashboard' : '/jobs',
+    });
+
+    // ✅ LOG: USER REGISTERED
+    await createLog({
+      action: 'user_registered',
+      userId: user._id,
+      targetId: user._id,
+      targetModel: 'User',
+      description: `New ${role} registered: ${name} (${email})`,
+      metadata: { role, email: email.toLowerCase() },
+      ip,
+    });
 
     return NextResponse.json(
       {

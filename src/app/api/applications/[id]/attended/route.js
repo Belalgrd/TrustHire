@@ -8,6 +8,8 @@ import razorpay from '@/lib/razorpay';
 import { authenticate } from '@/lib/auth';
 import { sendEmail } from '@/lib/resend';
 import { refundProcessedEmail } from '@/emails/refundProcessed';
+import { createNotification } from '@/lib/notifications';
+import { createLog, getIP } from '@/lib/logger';
 
 export async function PATCH(request, { params }) {
   try {
@@ -15,6 +17,7 @@ export async function PATCH(request, { params }) {
     if (auth.error) return auth.error;
 
     await connectDB();
+    const ip = getIP(request);
 
     const { id } = params;
 
@@ -37,7 +40,6 @@ export async function PATCH(request, { params }) {
     application.status = 'interview_attended';
     await application.save();
 
-    // ── REFUND on attendance ──
     const fee = await ChallengeFee.findOne({
       applicationId: id,
       status: 'held',
@@ -49,9 +51,7 @@ export async function PATCH(request, { params }) {
           fee.razorpayPaymentId,
           {
             amount: fee.amount * 100,
-            notes: {
-              reason: 'Attended interview — refund processed',
-            },
+            notes: { reason: 'Attended interview — refund processed' },
           }
         );
 
@@ -61,7 +61,16 @@ export async function PATCH(request, { params }) {
         fee.processedAt = new Date();
         await fee.save();
 
-        console.log(`✅ Attended refund: ₹${fee.amount} → ${refund.id}`);
+        // ✅ LOG: REFUND ON ATTENDANCE
+        await createLog({
+          action: 'refund_processed',
+          userId: application.applicantId,
+          targetId: fee._id,
+          targetModel: 'ChallengeFee',
+          description: `Refund ₹${fee.amount} processed — interview attended`,
+          metadata: { amount: fee.amount, refundId: refund.id, reason: 'attended' },
+          ip,
+        });
       } catch (refundError) {
         console.error('❌ Refund failed:', refundError.message);
       }
@@ -84,12 +93,36 @@ export async function PATCH(request, { params }) {
             subject: refundEmail.subject,
             html: refundEmail.html,
           });
-          console.log('📧 Refund email sent to:', applicant.email);
         }
       }
     } catch (emailError) {
       console.error('📧 Refund email failed:', emailError);
     }
+
+    // ✅ CREATE ATTENDED NOTIFICATION
+    await createNotification({
+      userId: application.applicantId,
+      type: 'interview_attended',
+      title: 'Interview Attended ✅',
+      message: `Your interview for ${application.jobId.title} at ${application.jobId.company} has been marked as attended.${fee ? ` ₹${fee.amount} refund initiated.` : ''}`,
+      link: '/applicant/applications',
+    });
+
+    // ✅ LOG: INTERVIEW ATTENDED
+    await createLog({
+      action: 'application_attended',
+      userId: auth.userId,
+      targetId: application._id,
+      targetModel: 'Application',
+      description: `Interview attended — ${application.jobId.title}`,
+      metadata: {
+        applicantId: application.applicantId.toString(),
+        jobTitle: application.jobId.title,
+        hadFee: !!fee,
+        feeAmount: fee?.amount || 0,
+      },
+      ip,
+    });
 
     return NextResponse.json({
       success: true,

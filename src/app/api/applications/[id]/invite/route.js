@@ -3,10 +3,11 @@ import { NextResponse } from 'next/server';
 import connectDB from '@/lib/db';
 import Application from '@/models/Application';
 import User from '@/models/User';
-import Job from '@/models/Job';
 import { authenticate } from '@/lib/auth';
 import { sendEmail } from '@/lib/resend';
 import { interviewInviteEmail } from '@/emails/interviewInvite';
+import { createNotification } from '@/lib/notifications';
+import { createLog, getIP } from '@/lib/logger';
 
 export async function PATCH(request, { params }) {
   try {
@@ -14,6 +15,7 @@ export async function PATCH(request, { params }) {
     if (auth.error) return auth.error;
 
     await connectDB();
+    const ip = getIP(request);
 
     const { id } = params;
     const { interviewDate, message } = await request.json();
@@ -53,11 +55,34 @@ export async function PATCH(request, { params }) {
           subject: emailContent.subject,
           html: emailContent.html,
         });
-        console.log('📧 Interview invite email sent to:', applicant.email);
       }
     } catch (emailError) {
       console.error('📧 Interview invite email failed:', emailError);
     }
+
+    // ✅ CREATE INTERVIEW NOTIFICATION
+    await createNotification({
+      userId: application.applicantId,
+      type: 'interview_invited',
+      title: 'Interview Invitation! 🎯',
+      message: `${application.jobId.company} invited you for an interview for ${application.jobId.title}.`,
+      link: '/applicant/applications',
+    });
+
+    // ✅ LOG: INTERVIEW INVITED
+    await createLog({
+      action: 'application_invited',
+      userId: auth.userId,
+      targetId: application._id,
+      targetModel: 'Application',
+      description: `Recruiter invited applicant for interview — ${application.jobId.title}`,
+      metadata: {
+        applicantId: application.applicantId.toString(),
+        jobTitle: application.jobId.title,
+        interviewDate,
+      },
+      ip,
+    });
 
     return NextResponse.json({
       success: true,

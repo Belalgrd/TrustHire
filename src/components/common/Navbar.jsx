@@ -12,6 +12,7 @@ import {
   HiViewGrid,
   HiCurrencyRupee,
 } from 'react-icons/hi';
+import NotificationBell from '@/components/common/NotificationBell';
 
 export default function Navbar() {
   const { user, isAuthenticated, isRecruiter, logout } = useAuth();
@@ -87,8 +88,9 @@ export default function Navbar() {
                   </>
                 )}
 
-                {/* User Menu */}
-                <div className="flex items-center gap-3 ml-4 pl-4 border-l border-gray-200">
+                {/* Notification Bell + User Menu */}
+                <div className="flex items-center gap-2 ml-4 pl-4 border-l border-gray-200">
+                  <NotificationBell />
                   <Link
                     href={profileHref}
                     className="flex items-center gap-3 hover:opacity-80 transition-opacity"
@@ -132,17 +134,20 @@ export default function Navbar() {
             )}
           </div>
 
-          {/* Mobile Hamburger */}
-          <button
-            onClick={() => setMobileOpen(!mobileOpen)}
-            className="md:hidden p-2 text-gray-600"
-          >
-            {mobileOpen ? (
-              <HiX className="w-6 h-6" />
-            ) : (
-              <HiMenu className="w-6 h-6" />
-            )}
-          </button>
+          {/* Mobile: Bell + Hamburger */}
+          <div className="md:hidden flex items-center gap-2">
+            {isAuthenticated && <NotificationBell />}
+            <button
+              onClick={() => setMobileOpen(!mobileOpen)}
+              className="p-2 text-gray-600"
+            >
+              {mobileOpen ? (
+                <HiX className="w-6 h-6" />
+              ) : (
+                <HiMenu className="w-6 h-6" />
+              )}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -216,7 +221,6 @@ export default function Navbar() {
                   </>
                 )}
 
-                {/* Mobile User Section */}
                 <div className="border-t border-gray-100 pt-2 mt-2">
                   <Link
                     href={profileHref}

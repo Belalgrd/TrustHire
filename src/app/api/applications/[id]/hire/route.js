@@ -9,6 +9,8 @@ import { authenticate } from '@/lib/auth';
 import { sendEmail } from '@/lib/resend';
 import { hiredConfirmationEmail } from '@/emails/hiredConfirmation';
 import { refundProcessedEmail } from '@/emails/refundProcessed';
+import { createNotification } from '@/lib/notifications';
+import { createLog, getIP } from '@/lib/logger';
 
 export async function PATCH(request, { params }) {
   try {
@@ -16,6 +18,7 @@ export async function PATCH(request, { params }) {
     if (auth.error) return auth.error;
 
     await connectDB();
+    const ip = getIP(request);
 
     const { id } = params;
 
@@ -38,7 +41,6 @@ export async function PATCH(request, { params }) {
     application.status = 'hired';
     await application.save();
 
-    // ── INSTANT REFUND on hire ──
     const fee = await ChallengeFee.findOne({
       applicationId: id,
       status: 'held',
@@ -50,9 +52,7 @@ export async function PATCH(request, { params }) {
           fee.razorpayPaymentId,
           {
             amount: fee.amount * 100,
-            notes: {
-              reason: 'Successfully hired — congratulations!',
-            },
+            notes: { reason: 'Successfully hired — congratulations!' },
           }
         );
 
@@ -62,7 +62,16 @@ export async function PATCH(request, { params }) {
         fee.processedAt = new Date();
         await fee.save();
 
-        console.log(`✅ Hire refund: ₹${fee.amount} → ${refund.id}`);
+        // ✅ LOG: REFUND ON HIRE
+        await createLog({
+          action: 'refund_processed',
+          userId: application.applicantId,
+          targetId: fee._id,
+          targetModel: 'ChallengeFee',
+          description: `Refund ₹${fee.amount} processed — candidate hired`,
+          metadata: { amount: fee.amount, refundId: refund.id, reason: 'hired' },
+          ip,
+        });
       } catch (refundError) {
         console.error('❌ Refund failed:', refundError.message);
       }
@@ -72,7 +81,6 @@ export async function PATCH(request, { params }) {
     try {
       const applicant = await User.findById(application.applicantId);
       if (applicant) {
-        // Send hired confirmation email
         const hiredEmail = hiredConfirmationEmail({
           applicantName: applicant.name,
           jobTitle: application.jobId.title,
@@ -85,9 +93,7 @@ export async function PATCH(request, { params }) {
           subject: hiredEmail.subject,
           html: hiredEmail.html,
         });
-        console.log('📧 Hired email sent to:', applicant.email);
 
-        // Send refund email if fee was refunded
         if (fee && fee.status === 'refunded') {
           const refundEmail = refundProcessedEmail({
             applicantName: applicant.name,
@@ -101,12 +107,36 @@ export async function PATCH(request, { params }) {
             subject: refundEmail.subject,
             html: refundEmail.html,
           });
-          console.log('📧 Refund email sent to:', applicant.email);
         }
       }
     } catch (emailError) {
       console.error('📧 Hired email failed:', emailError);
     }
+
+    // ✅ CREATE HIRED NOTIFICATION
+    await createNotification({
+      userId: application.applicantId,
+      type: 'hired',
+      title: 'Congratulations, You\'re Hired! 🥳',
+      message: `${application.jobId.company} has hired you for ${application.jobId.title}!${fee ? ` ₹${fee.amount} refund initiated.` : ''}`,
+      link: '/applicant/applications',
+    });
+
+    // ✅ LOG: APPLICATION HIRED
+    await createLog({
+      action: 'application_hired',
+      userId: auth.userId,
+      targetId: application._id,
+      targetModel: 'Application',
+      description: `Candidate hired — ${application.jobId.title}`,
+      metadata: {
+        applicantId: application.applicantId.toString(),
+        jobTitle: application.jobId.title,
+        hadFee: !!fee,
+        feeAmount: fee?.amount || 0,
+      },
+      ip,
+    });
 
     return NextResponse.json({
       success: true,

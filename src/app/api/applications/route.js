@@ -7,6 +7,8 @@ import User from '@/models/User';
 import { authenticate } from '@/lib/auth';
 import { sendEmail } from '@/lib/resend';
 import { applicationReceivedEmail } from '@/emails/applicationReceived';
+import { createNotification } from '@/lib/notifications';
+import { createLog, getIP } from '@/lib/logger';
 
 export async function POST(request) {
   try {
@@ -14,6 +16,7 @@ export async function POST(request) {
     if (auth.error) return auth.error;
 
     await connectDB();
+    const ip = getIP(request);
 
     const user = await User.findById(auth.userId);
     if (!user || user.role !== 'applicant') {
@@ -84,10 +87,29 @@ export async function POST(request) {
         subject: emailContent.subject,
         html: emailContent.html,
       });
-      console.log('📧 Application received email sent to:', user.email);
     } catch (emailError) {
       console.error('📧 Application email failed:', emailError);
     }
+
+    // ✅ CREATE APPLICATION NOTIFICATION
+    await createNotification({
+      userId: auth.userId,
+      type: 'application_received',
+      title: 'Application Submitted! 📋',
+      message: `Your application for ${job.title} at ${job.company} has been submitted.`,
+      link: '/applicant/applications',
+    });
+
+    // ✅ LOG: APPLICATION CREATED
+    await createLog({
+      action: 'application_created',
+      userId: auth.userId,
+      targetId: application._id,
+      targetModel: 'Application',
+      description: `${user.name} applied for ${job.title} at ${job.company}`,
+      metadata: { jobId, jobTitle: job.title, company: job.company },
+      ip,
+    });
 
     return NextResponse.json(
       {

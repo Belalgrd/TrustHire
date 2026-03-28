@@ -9,6 +9,8 @@ import { authenticate } from '@/lib/auth';
 import { sendEmail } from '@/lib/resend';
 import { applicationRejectedEmail } from '@/emails/applicationRejected';
 import { refundProcessedEmail } from '@/emails/refundProcessed';
+import { createNotification } from '@/lib/notifications';
+import { createLog, getIP } from '@/lib/logger';
 
 export async function PATCH(request, { params }) {
   try {
@@ -16,6 +18,7 @@ export async function PATCH(request, { params }) {
     if (auth.error) return auth.error;
 
     await connectDB();
+    const ip = getIP(request);
 
     const { id } = params;
 
@@ -38,7 +41,6 @@ export async function PATCH(request, { params }) {
     application.status = 'rejected';
     await application.save();
 
-    // ── INSTANT REFUND if challenge fee exists ──
     const fee = await ChallengeFee.findOne({
       applicationId: id,
       status: 'held',
@@ -50,9 +52,7 @@ export async function PATCH(request, { params }) {
           fee.razorpayPaymentId,
           {
             amount: fee.amount * 100,
-            notes: {
-              reason: 'Application rejected by recruiter',
-            },
+            notes: { reason: 'Application rejected by recruiter' },
           }
         );
 
@@ -62,7 +62,16 @@ export async function PATCH(request, { params }) {
         fee.processedAt = new Date();
         await fee.save();
 
-        console.log(`✅ Instant refund: ₹${fee.amount} → ${refund.id}`);
+        // ✅ LOG: REFUND PROCESSED
+        await createLog({
+          action: 'refund_processed',
+          userId: application.applicantId,
+          targetId: fee._id,
+          targetModel: 'ChallengeFee',
+          description: `Refund ₹${fee.amount} processed — application rejected`,
+          metadata: { amount: fee.amount, refundId: refund.id, reason: 'rejected' },
+          ip,
+        });
       } catch (refundError) {
         console.error('❌ Refund failed:', refundError.message);
       }
@@ -72,7 +81,6 @@ export async function PATCH(request, { params }) {
     try {
       const applicant = await User.findById(application.applicantId);
       if (applicant) {
-        // Send rejection email
         const rejectEmail = applicationRejectedEmail({
           applicantName: applicant.name,
           jobTitle: application.jobId.title,
@@ -85,9 +93,7 @@ export async function PATCH(request, { params }) {
           subject: rejectEmail.subject,
           html: rejectEmail.html,
         });
-        console.log('📧 Rejection email sent to:', applicant.email);
 
-        // Send refund email if fee was refunded
         if (fee && fee.status === 'refunded') {
           const refundEmail = refundProcessedEmail({
             applicantName: applicant.name,
@@ -101,12 +107,36 @@ export async function PATCH(request, { params }) {
             subject: refundEmail.subject,
             html: refundEmail.html,
           });
-          console.log('📧 Refund email sent to:', applicant.email);
         }
       }
     } catch (emailError) {
       console.error('📧 Rejection email failed:', emailError);
     }
+
+    // ✅ CREATE REJECTION NOTIFICATION
+    await createNotification({
+      userId: application.applicantId,
+      type: 'rejected',
+      title: 'Application Update',
+      message: `Your application for ${application.jobId.title} at ${application.jobId.company} was not selected.${fee ? ` ₹${fee.amount} refund initiated.` : ''}`,
+      link: '/applicant/applications',
+    });
+
+    // ✅ LOG: APPLICATION REJECTED
+    await createLog({
+      action: 'application_rejected',
+      userId: auth.userId,
+      targetId: application._id,
+      targetModel: 'Application',
+      description: `Recruiter rejected application — ${application.jobId.title}`,
+      metadata: {
+        applicantId: application.applicantId.toString(),
+        jobTitle: application.jobId.title,
+        hadFee: !!fee,
+        feeAmount: fee?.amount || 0,
+      },
+      ip,
+    });
 
     return NextResponse.json({
       success: true,
