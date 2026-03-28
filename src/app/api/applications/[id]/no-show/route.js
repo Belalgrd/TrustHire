@@ -1,8 +1,12 @@
+export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/db';
 import Application from '@/models/Application';
+import User from '@/models/User';
 import ChallengeFee from '@/models/ChallengeFee';
 import { authenticate } from '@/lib/auth';
+import { sendEmail } from '@/lib/resend';
+import { feeForfeitedEmail } from '@/emails/feeForfeited';
 
 export async function PATCH(request, { params }) {
   try {
@@ -44,6 +48,29 @@ export async function PATCH(request, { params }) {
       fee.processedAt = new Date();
       await fee.save();
       console.log(`🚫 Fee forfeited: ₹${fee.amount}`);
+    }
+
+    // ✅ SEND FEE FORFEITED EMAIL
+    try {
+      if (fee) {
+        const applicant = await User.findById(application.applicantId);
+        if (applicant) {
+          const forfeitEmail = feeForfeitedEmail({
+            applicantName: applicant.name,
+            jobTitle: application.jobId.title,
+            company: application.jobId.company,
+            amount: fee.amount,
+          });
+          await sendEmail({
+            to: applicant.email,
+            subject: forfeitEmail.subject,
+            html: forfeitEmail.html,
+          });
+          console.log('📧 Fee forfeited email sent to:', applicant.email);
+        }
+      }
+    } catch (emailError) {
+      console.error('📧 Forfeit email failed:', emailError);
     }
 
     return NextResponse.json({

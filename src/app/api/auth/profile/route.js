@@ -1,4 +1,5 @@
 // src/app/api/auth/profile/route.js
+export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/db';
 import User from '@/models/User';

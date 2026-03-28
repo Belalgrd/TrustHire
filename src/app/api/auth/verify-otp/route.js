@@ -1,8 +1,11 @@
+export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/db';
 import User from '@/models/User';
 import Otp from '@/models/Otp';
 import { generateToken } from '@/lib/auth';
+import { sendEmail } from '@/lib/resend';
+import { welcomeEmail } from '@/emails/welcomeEmail';
 
 export async function POST(request) {
   try {
@@ -10,7 +13,6 @@ export async function POST(request) {
 
     const { name, email, password, role, otp } = await request.json();
 
-    // ── Validation ──
     if (!name || !email || !password || !role || !otp) {
       return NextResponse.json(
         { error: 'All fields are required' },
@@ -18,7 +20,6 @@ export async function POST(request) {
       );
     }
 
-    // ── Find OTP record ──
     const otpRecord = await Otp.findOne({
       email: email.toLowerCase(),
       purpose: 'register',
@@ -31,7 +32,6 @@ export async function POST(request) {
       );
     }
 
-    // ── Check if expired ──
     if (new Date() > otpRecord.expiresAt) {
       await Otp.deleteOne({ _id: otpRecord._id });
       return NextResponse.json(
@@ -40,7 +40,6 @@ export async function POST(request) {
       );
     }
 
-    // ── Check max attempts (5) ──
     if (otpRecord.attempts >= 5) {
       await Otp.deleteOne({ _id: otpRecord._id });
       return NextResponse.json(
@@ -49,7 +48,6 @@ export async function POST(request) {
       );
     }
 
-    // ── Verify OTP ──
     if (otpRecord.otp !== otp.trim()) {
       otpRecord.attempts += 1;
       await otpRecord.save();
@@ -61,7 +59,6 @@ export async function POST(request) {
       );
     }
 
-    // ── OTP is correct — Check if user already exists (double check) ──
     const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) {
       await Otp.deleteOne({ _id: otpRecord._id });
@@ -71,7 +68,6 @@ export async function POST(request) {
       );
     }
 
-    // ── Create user ──
     const user = await User.create({
       name,
       email: email.toLowerCase(),
@@ -79,11 +75,23 @@ export async function POST(request) {
       role,
     });
 
-    // ── Clean up OTP ──
     await Otp.deleteMany({ email: email.toLowerCase(), purpose: 'register' });
 
-    // ── Generate token ──
     const token = generateToken(user._id);
+
+    // ✅ SEND WELCOME EMAIL
+    try {
+      const emailContent = welcomeEmail({ name, role });
+      await sendEmail({
+        to: email.toLowerCase(),
+        subject: emailContent.subject,
+        html: emailContent.html,
+      });
+      console.log('📧 Welcome email sent to:', email);
+    } catch (emailError) {
+      console.error('📧 Welcome email failed:', emailError);
+      // Don't fail registration if email fails
+    }
 
     return NextResponse.json(
       {

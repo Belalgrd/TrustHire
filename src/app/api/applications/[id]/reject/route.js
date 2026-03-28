@@ -1,9 +1,14 @@
+export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/db';
 import Application from '@/models/Application';
+import User from '@/models/User';
 import ChallengeFee from '@/models/ChallengeFee';
 import razorpay from '@/lib/razorpay';
 import { authenticate } from '@/lib/auth';
+import { sendEmail } from '@/lib/resend';
+import { applicationRejectedEmail } from '@/emails/applicationRejected';
+import { refundProcessedEmail } from '@/emails/refundProcessed';
 
 export async function PATCH(request, { params }) {
   try {
@@ -60,8 +65,47 @@ export async function PATCH(request, { params }) {
         console.log(`✅ Instant refund: ₹${fee.amount} → ${refund.id}`);
       } catch (refundError) {
         console.error('❌ Refund failed:', refundError.message);
-        // Don't fail the rejection — refund engine will catch it later
       }
+    }
+
+    // ✅ SEND REJECTION + REFUND EMAILS
+    try {
+      const applicant = await User.findById(application.applicantId);
+      if (applicant) {
+        // Send rejection email
+        const rejectEmail = applicationRejectedEmail({
+          applicantName: applicant.name,
+          jobTitle: application.jobId.title,
+          company: application.jobId.company,
+          hadChallengeFee: !!fee,
+          amount: fee?.amount || 0,
+        });
+        await sendEmail({
+          to: applicant.email,
+          subject: rejectEmail.subject,
+          html: rejectEmail.html,
+        });
+        console.log('📧 Rejection email sent to:', applicant.email);
+
+        // Send refund email if fee was refunded
+        if (fee && fee.status === 'refunded') {
+          const refundEmail = refundProcessedEmail({
+            applicantName: applicant.name,
+            jobTitle: application.jobId.title,
+            company: application.jobId.company,
+            amount: fee.amount,
+            reason: 'rejected',
+          });
+          await sendEmail({
+            to: applicant.email,
+            subject: refundEmail.subject,
+            html: refundEmail.html,
+          });
+          console.log('📧 Refund email sent to:', applicant.email);
+        }
+      }
+    } catch (emailError) {
+      console.error('📧 Rejection email failed:', emailError);
     }
 
     return NextResponse.json({

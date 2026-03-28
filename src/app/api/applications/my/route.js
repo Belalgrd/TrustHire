@@ -1,6 +1,8 @@
+export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/db';
 import Application from '@/models/Application';
+import '@/models/Job';
 import { authenticate } from '@/lib/auth';
 
 // ── GET MY APPLICATIONS (Applicant) ──

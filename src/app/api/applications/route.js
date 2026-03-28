@@ -1,11 +1,13 @@
+export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/db';
 import Application from '@/models/Application';
 import Job from '@/models/Job';
 import User from '@/models/User';
 import { authenticate } from '@/lib/auth';
+import { sendEmail } from '@/lib/resend';
+import { applicationReceivedEmail } from '@/emails/applicationReceived';
 
-// ── CREATE APPLICATION (Applicant Only) ──
 export async function POST(request) {
   try {
     const auth = await authenticate(request);
@@ -13,7 +15,6 @@ export async function POST(request) {
 
     await connectDB();
 
-    // Check if user is applicant
     const user = await User.findById(auth.userId);
     if (!user || user.role !== 'applicant') {
       return NextResponse.json(
@@ -31,7 +32,6 @@ export async function POST(request) {
       );
     }
 
-    // Check if job exists and is active
     const job = await Job.findById(jobId);
     if (!job) {
       return NextResponse.json(
@@ -47,7 +47,6 @@ export async function POST(request) {
       );
     }
 
-    // Check if already applied
     const existingApplication = await Application.findOne({
       jobId,
       applicantId: auth.userId,
@@ -60,7 +59,6 @@ export async function POST(request) {
       );
     }
 
-    // Create application
     const application = await Application.create({
       jobId,
       applicantId: auth.userId,
@@ -68,10 +66,28 @@ export async function POST(request) {
       isPriority: false,
     });
 
-    // Increment application count on job
     await Job.findByIdAndUpdate(jobId, {
       $inc: { applicationsCount: 1 },
     });
+
+    // ✅ SEND APPLICATION RECEIVED EMAIL
+    try {
+      const emailContent = applicationReceivedEmail({
+        applicantName: user.name,
+        jobTitle: job.title,
+        company: job.company,
+        isPriority: false,
+        amount: 0,
+      });
+      await sendEmail({
+        to: user.email,
+        subject: emailContent.subject,
+        html: emailContent.html,
+      });
+      console.log('📧 Application received email sent to:', user.email);
+    } catch (emailError) {
+      console.error('📧 Application email failed:', emailError);
+    }
 
     return NextResponse.json(
       {

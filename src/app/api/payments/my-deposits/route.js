@@ -1,6 +1,8 @@
+export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import connectDB from '@/lib/db';
 import ChallengeFee from '@/models/ChallengeFee';
+import '@/models/Job';
 import { authenticate } from '@/lib/auth';
 
 // ── GET MY DEPOSITS (Applicant) ──

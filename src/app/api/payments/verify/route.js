@@ -1,12 +1,15 @@
+export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import crypto from 'crypto';
 import connectDB from '@/lib/db';
 import Application from '@/models/Application';
 import Job from '@/models/Job';
+import User from '@/models/User';
 import ChallengeFee from '@/models/ChallengeFee';
 import { authenticate } from '@/lib/auth';
+import { sendEmail } from '@/lib/resend';
+import { priorityConfirmationEmail } from '@/emails/priorityConfirmation';
 
-// ── VERIFY RAZORPAY PAYMENT ──
 export async function POST(request) {
   try {
     const auth = await authenticate(request);
@@ -26,7 +29,6 @@ export async function POST(request) {
       razorpay_payment_id,
     });
 
-    // ── Validate inputs ──
     if (
       !razorpay_order_id ||
       !razorpay_payment_id ||
@@ -39,7 +41,7 @@ export async function POST(request) {
       );
     }
 
-    // ── Verify Razorpay signature (CRITICAL for security) ──
+    // ── Verify Razorpay signature ──
     const body = razorpay_order_id + '|' + razorpay_payment_id;
 
     const expectedSignature = crypto
@@ -76,9 +78,11 @@ export async function POST(request) {
     }
 
     // ── Mark application as priority ──
-    await Application.findByIdAndUpdate(applicationId, {
-      isPriority: true,
-    });
+    const application = await Application.findByIdAndUpdate(
+      applicationId,
+      { isPriority: true },
+      { new: true }
+    ).populate('jobId');
 
     // ── Increment priority count on job ──
     await Job.findByIdAndUpdate(fee.jobId, {
@@ -86,6 +90,28 @@ export async function POST(request) {
     });
 
     console.log('✅ Payment verified & application boosted!');
+
+    // ✅ SEND PRIORITY CONFIRMATION EMAIL
+    try {
+      const user = await User.findById(auth.userId);
+      if (user && application) {
+        const emailContent = priorityConfirmationEmail({
+          applicantName: user.name,
+          jobTitle: application.jobId.title,
+          company: application.jobId.company,
+          amount: fee.amount,
+          paymentId: razorpay_payment_id,
+        });
+        await sendEmail({
+          to: user.email,
+          subject: emailContent.subject,
+          html: emailContent.html,
+        });
+        console.log('📧 Priority confirmation email sent to:', user.email);
+      }
+    } catch (emailError) {
+      console.error('📧 Priority email failed:', emailError);
+    }
 
     return NextResponse.json({
       success: true,
